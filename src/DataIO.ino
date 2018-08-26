@@ -159,10 +159,10 @@ void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTra
   updateEncoderStream(stream, encoder, pinTxEn, true, data->var.bytes[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, data->var.bytes[0]);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[3]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[2]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[1]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[0]);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[2]);
@@ -236,10 +236,10 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   updateEncoderStream(stream, encoder, pinTxEn, true, data->var.bytes[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, data->var.bytes[0]);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[3]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[2]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[1]);
-  updateEncoderStream(stream, encoder, pinTxEn, true, data->phi.bytes[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[0]);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[2]);
@@ -272,7 +272,7 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   int32Value l;
   for (uint32_t i = 0; i < data->sampleCount.value; i++) {
     yeldTask();
-    
+
     l.bytes[0] = data->waveform[i][0];
     l.bytes[1] = data->waveform[i][1];
     l.bytes[2] = data->waveform[i][2];

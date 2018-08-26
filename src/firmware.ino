@@ -3,12 +3,11 @@
 #include <SPI.h>
 #include "FlashStorage.h"
 #include "ZeroTimer.h"
-#include "MemoryFree.h"
 
 #if defined(SERIAL_BUFFER_SIZE) && SERIAL_BUFFER_SIZE == 256
 //OK
 #else
-#error Wrong buffer size, change SERIAL_BUFFER_SIZE in RingBuffer.h
+#error Wrong buffer size, change SERIAL_BUFFER_SIZE in RingBuffer.h to 256
 #endif
 
 #define IWV          (0x0  << 3) // 24
@@ -53,8 +52,9 @@ const uint8_t PIN_INT = 8, PIN_CS = A2, PIN_BUTTON = 9, PIN_GREEN_LED = 13, PIN_
 const uint32_t MIN_MEASURE_SAMPLES = 10, MAX_MEASURE_SAMPLES = 800, OVELOAD_PERIOD = 4200, RX_BUFFER_SIZE = 200, RAW_BUFFER_SIZE = 9 * 200;
 const uint32_t DMA_CH_TX = 0, DMA_CH_RX = 1;
 const uint8_t BUTTON_DEBOUNCE = 12;
-const float RAW_TO_AMP = 1.0 / 170240.0, RAW_TO_VOLT = 1.0 / 13565.65, RAW_TO_HZ = 8000.0, FLOAT_INVALID = 0x7FC00000;
-const int32_t MIN_ADC_RANGE = -5320000, MAX_ADC_RANGE = 5320000;
+const float RAW_TO_AMP = 1.0 / 170240.0, RAW_TO_VOLT = 1.0 / 13565.65, RAW_TO_HZ = 8000.0, FLOAT_INVALID = 0.0 / 0.0;
+const int32_t ADC_RANGE = 5320000;
+const int64_t MIN_POWER = 0.5 / RAW_TO_VOLT / RAW_TO_AMP;
 
 union floatValue {
   float value;
@@ -76,7 +76,7 @@ struct samplesBuffer {
   boolean isReady, overload, overflow;
   uint32Value sampleCount;
   int64_t rmsCurrentSum, rmsVoltage1Sum, rmsVoltage2Sum, activePowerSum;
-  floatValue iRms, v1Rms, v2Rms, hz, w, va, var, phi;
+  floatValue iRms, v1Rms, v2Rms, hz, w, va, var, powerFactor;
   uint8_t waveform[MAX_MEASURE_SAMPLES][9];
 };
 struct integralMeasureBuffer {
@@ -123,14 +123,20 @@ struct dmacdescriptor {
   uint32_t descaddr;
 };
 
-volatile samplesBuffer bufferLow = { .isReady = false, .overload = false, .overflow = false, .sampleCount = { .value = 0 }, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0 };
-volatile samplesBuffer bufferHigh = { .isReady = false, .overload = false, .overflow = false, .sampleCount = { .value = 0 }, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0 };
+volatile samplesBuffer bufferLow = { .isReady = false, .overload = false, .overflow = false, .sampleCount = { .value = 0 }, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0,
+                                     .iRms = { .value = 0 }, .v1Rms = { .value = 0 }, .v2Rms = { .value = 0 }, .hz = { .value = 0 }, .w = { .value = 0 }, .va = { .value = 0 }, .var = { .value = 0 }, .powerFactor = { .value = 0 },
+                                     .waveform = { 0 }
+                                   };
+volatile samplesBuffer bufferHigh = { .isReady = false, .overload = false, .overflow = false, .sampleCount = { .value = 0 }, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0,
+                                      .iRms = { .value = 0 }, .v1Rms = { .value = 0 }, .v2Rms = { .value = 0 }, .hz = { .value = 0 }, .w = { .value = 0 }, .va = { .value = 0 }, .var = { .value = 0 }, .powerFactor = { .value = 0 },
+                                      .waveform = { 0 }
+                                    };
 
 volatile integralMeasureBuffer integralBufferLow = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .activePowerSum = 0 };
 volatile integralMeasureBuffer integralBufferHigh = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .activePowerSum = 0 };
 
-volatile rawDataBuffer rawBufferLow = { .isReady = false, .sampleCount = 0 };
-volatile rawDataBuffer rawBufferHigh = { .isReady = false, .sampleCount = 0 };
+volatile rawDataBuffer rawBufferLow = { .isReady = false, .sampleCount = 0, .rawData = { 0 } };
+volatile rawDataBuffer rawBufferHigh = { .isReady = false, .sampleCount = 0, .rawData = { 0 } };
 
 serial serialUsb = { .myID = 0, .bufferIndex = 0, .pinTxEn = -1 };
 serial serialCan = { .myID = 1, .bufferIndex = 0, .pinTxEn = -1 };
@@ -534,7 +540,7 @@ void prepareBuffer(volatile samplesBuffer* data) {
     data->w.value = FLOAT_INVALID;
     data->va.value = FLOAT_INVALID;
     data->var.value = FLOAT_INVALID;
-    data->phi.value = FLOAT_INVALID;
+    data->powerFactor.value = FLOAT_INVALID;
   }
   else {
     data->iRms.value = sqrt((float)data->rmsCurrentSum / (float)data->sampleCount.value) * RAW_TO_AMP;
@@ -542,9 +548,9 @@ void prepareBuffer(volatile samplesBuffer* data) {
     data->v2Rms.value = sqrt((float)data->rmsVoltage2Sum / (float)data->sampleCount.value) * RAW_TO_VOLT;
     data->hz.value = RAW_TO_HZ / (float)data->sampleCount.value;
     data->w.value = (float)data->activePowerSum / (float)data->sampleCount.value * RAW_TO_AMP * RAW_TO_VOLT;
-    data->va.value = data->iRms.value * data->v1Rms.value;
-    data->var.value = sqrt(data->va.value * data->va.value - data->w.value * data->w.value);
-    data->phi.value = data->w.value / data->va.value;
+    data->va.value = data->w.value ? data->iRms.value * data->v1Rms.value : 0;
+    data->var.value = data->w.value ? sqrt(data->va.value * data->va.value - data->w.value * data->w.value) : 0;
+    data->powerFactor.value = data->w.value ? data->w.value / data->va.value : FLOAT_INVALID;
   }
 }
 
@@ -553,8 +559,8 @@ void yeldTask() {
     float iRms = sqrt((float)integralBufferLow.rmsCurrentSum / (float)integralBufferLow.sampleCount) * RAW_TO_AMP;
     float v1Rms = sqrt((float)integralBufferLow.rmsVoltage1Sum / (float)integralBufferLow.sampleCount) * RAW_TO_VOLT;
     float w = (float)integralBufferLow.activePowerSum / (float)integralBufferLow.sampleCount * RAW_TO_AMP * RAW_TO_VOLT;
-    float va = iRms * v1Rms;
-    float var = sqrt(va * va - w * w);
+    float va = w ? iRms * v1Rms : 0;
+    float var = w ? sqrt(va * va - w * w) : 0;
     float dt = (float)integralBufferLow.sampleCount / RAW_TO_HZ;
 
     float add = w * dt / 3600.0 / 1000.0;
@@ -581,8 +587,8 @@ void yeldTask() {
     float iRms = sqrt((float)integralBufferHigh.rmsCurrentSum / (float)integralBufferHigh.sampleCount) * RAW_TO_AMP;
     float v1Rms = sqrt((float)integralBufferHigh.rmsVoltage1Sum / (float)integralBufferHigh.sampleCount) * RAW_TO_VOLT;
     float w = (float)integralBufferHigh.activePowerSum / (float)integralBufferHigh.sampleCount * RAW_TO_AMP * RAW_TO_VOLT;
-    float va = iRms * v1Rms;
-    float var = sqrt(va * va - w * w);
+    float va = w ? iRms * v1Rms : 0;
+    float var = w ? sqrt(va * va - w * w) : 0;
     float dt = (float)integralBufferHigh.sampleCount / RAW_TO_HZ;
 
     float add = w * dt / 3600.0 / 1000.0;
@@ -797,9 +803,9 @@ void DMAC_Handler() {
     v1Filt.value /= 65536;
     v2Filt.value /= 65536;
 
-    boolean overload = i.value > (int64_t)MAX_ADC_RANGE * (int64_t)65536 || i.value < (int64_t)MIN_ADC_RANGE * (int64_t)65536 ||
-                       v1.value > (int64_t)MAX_ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)MIN_ADC_RANGE * (int64_t)65536 ||
-                       v2.value > (int64_t)MAX_ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)MIN_ADC_RANGE * (int64_t)65536;
+    boolean overload = i.value > (int64_t)ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-ADC_RANGE) * (int64_t)65536 ||
+                       v1.value > (int64_t)ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-ADC_RANGE) * (int64_t)65536 ||
+                       v2.value > (int64_t)ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-ADC_RANGE) * (int64_t)65536;
     if (overload) overloadTimer = OVELOAD_PERIOD;
     else if (overloadTimer) overloadTimer--;
 
@@ -850,6 +856,9 @@ void DMAC_Handler() {
     if (sign && !signOld) {
       if (dataSelection && bufferHigh.sampleCount.value > MIN_MEASURE_SAMPLES) {
         if (bufferHigh.sampleCount.value < MAX_MEASURE_SAMPLES) {
+          int64_t activePower = bufferHigh.activePowerSum / bufferHigh.sampleCount.value;
+          if (activePower < MIN_POWER && activePower > -MIN_POWER) bufferHigh.activePowerSum = 0;
+
           if (dataSelectionIntegral) {
             integralBufferHigh.sampleCount += bufferHigh.sampleCount.value;
             integralBufferHigh.rmsCurrentSum += bufferHigh.rmsCurrentSum;
@@ -912,6 +921,9 @@ void DMAC_Handler() {
       }
       else if (!dataSelection && bufferLow.sampleCount.value > MIN_MEASURE_SAMPLES) {
         if (bufferLow.sampleCount.value < MAX_MEASURE_SAMPLES) {
+          int64_t activePower = bufferLow.activePowerSum / bufferLow.sampleCount.value;
+          if (activePower < MIN_POWER && activePower > -MIN_POWER) bufferLow.activePowerSum = 0;
+
           if (dataSelectionIntegral) {
             integralBufferHigh.sampleCount += bufferLow.sampleCount.value;
             integralBufferHigh.rmsCurrentSum += bufferLow.rmsCurrentSum;
