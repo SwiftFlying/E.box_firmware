@@ -10,6 +10,8 @@
 #error Wrong buffer size, change SERIAL_BUFFER_SIZE in RingBuffer.h to 256
 #endif
 
+const uint8_t FIRMWARE_VERSION[] = { 1, 0, 0 };
+
 #define IWV          (0x0  << 3) // 24
 #define V1WV         (0x1  << 3) // 24
 #define V2WV         (0x2  << 3) // 24
@@ -394,7 +396,7 @@ boolean processSerial(serial* s) {
             switch (s->buffer[8]) {
               case 0: //send board type
                 if (len.value != 1) break;
-                writeBoardType(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+                writeBoardInfo(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
                 break;
 
               case 10: // send status

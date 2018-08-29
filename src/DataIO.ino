@@ -1,5 +1,5 @@
 void writeVoid(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -13,11 +13,11 @@ void writeVoid(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitActio
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
-void writeBoardType(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to) {
-  if(preTransmitAction) (*preTransmitAction)();
+void writeBoardInfo(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to) {
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -28,17 +28,45 @@ void writeBoardType(Stream* stream, b64_crc32_coder* encoder, void (*preTransmit
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x02);
+  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x15);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, hasCan);
   updateEncoderStream(stream, encoder, pinTxEn, true, hasWifi);
 
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[2]);
+
+  uint8_t* u = (uint8_t*)0x0080A00C;
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 3));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 2));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 1));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *u);
+
+  u = (uint8_t*)0x0080A040;
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 3));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 2));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 1));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *u);
+
+  u = (uint8_t*)0x0080A044;
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 3));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 2));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 1));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *u);
+
+  u = (uint8_t*)0x0080A048;
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 3));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 2));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *(u + 1));
+  updateEncoderStream(stream, encoder, pinTxEn, true, *u);
+
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void writeSettings(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to, settings* sett) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -62,11 +90,11 @@ void writeSettings(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitA
   for (uint8_t k = 0; k < sizeof(sett->wifiLoginPassword); k++) updateEncoderStream(stream, encoder, pinTxEn, true, sett->wifiLoginPassword[k]);
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void writeBoolean(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to, boolean value) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -82,11 +110,11 @@ void writeBoolean(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAc
   updateEncoderStream(stream, encoder, pinTxEn, true, value);
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void writeStatus(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -103,11 +131,11 @@ void writeStatus(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAct
   updateEncoderStream(stream, encoder, pinTxEn, true, overloadTimer > 0);
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to, volatile samplesBuffer* data) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -180,11 +208,11 @@ void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTra
   updateEncoderStream(stream, encoder, pinTxEn, true, kvarh.bytes[0]);
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAction)(), void (*postTransmitAction)(), int8_t pinTxEn, uint8_t from, uint8_t to, volatile samplesBuffer* data) {
-  if(preTransmitAction) (*preTransmitAction)();
+  if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
   updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
@@ -308,7 +336,7 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   }
 
   finalizeEncoderStream(stream, encoder, pinTxEn);
-  if(postTransmitAction) (*postTransmitAction)();
+  if (postTransmitAction) (*postTransmitAction)();
 }
 
 void updateEncoderStream(Stream* stream, b64_crc32_coder* encoder, int8_t pinTxEn, boolean updateCrc, uint8_t dataRaw) {
@@ -316,9 +344,9 @@ void updateEncoderStream(Stream* stream, b64_crc32_coder* encoder, int8_t pinTxE
   if (encoder->i >= 3) {
     a3_to_a4(encoder->a4, encoder->a3);
     for (uint8_t k = 0; k < 4; k++) {
-      if(pinTxEn >= 0) while(!digitalRead(pinTxEn)) yeldTask();
+      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
       stream->write(b64_alphabet[encoder->a4[k]]);
-      if(pinTxEn >= 0) stream->flush();
+      if (pinTxEn >= 0) stream->flush();
     }
     encoder->i = 0;
   }
@@ -340,18 +368,18 @@ void finalizeEncoderStream(Stream* stream, b64_crc32_coder* encoder, int8_t pinT
     for (uint8_t k = encoder->i; k < 3; k++) encoder->a3[k] = 0;
     a3_to_a4(encoder->a4, encoder->a3);
     for (uint8_t k = 0; k <= encoder->i; k++) {
-      if(pinTxEn >= 0) while(!digitalRead(pinTxEn)) yeldTask();
+      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
       stream->write(b64_alphabet[encoder->a4[k]]);
-      if(pinTxEn >= 0) stream->flush();
+      if (pinTxEn >= 0) stream->flush();
     }
     while (encoder->i++ < 3) {
-      if(pinTxEn >= 0) while(!digitalRead(pinTxEn)) yeldTask();
+      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
       stream->write('=');
-      if(pinTxEn >= 0) stream->flush();
+      if (pinTxEn >= 0) stream->flush();
     }
   }
 
-  if(pinTxEn >= 0) while(!digitalRead(pinTxEn)) yeldTask();
+  if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
   stream->write('\n');
   stream->flush();
 }
