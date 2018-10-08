@@ -4,6 +4,8 @@
 #include "FlashStorage.h"
 #include "ZeroTimer.h"
 
+#define DEBUG_CONNECTOR 0
+
 #if defined(SERIAL_BUFFER_SIZE) && SERIAL_BUFFER_SIZE == 256
 //OK
 #else
@@ -55,7 +57,7 @@ const uint32_t MIN_MEASURE_SAMPLES = 10, MAX_MEASURE_SAMPLES = 800, OVELOAD_PERI
 const uint32_t DMA_CH_TX = 0, DMA_CH_RX = 1;
 const uint8_t BUTTON_DEBOUNCE = 12;
 const float RAW_TO_AMP = 1.0 / 170240.0, RAW_TO_VOLT = 1.0 / 13565.65, RAW_TO_HZ = 8000.0, FLOAT_INVALID = 0.0 / 0.0;
-const int32_t ADC_RANGE = 5320000;
+const int32_t VOLTAGE_ADC_RANGE = 5320000, CURRENT_ADC_RANGE = 3610790;
 const int64_t MIN_POWER = 0.5 / RAW_TO_VOLT / RAW_TO_AMP;
 
 union floatValue {
@@ -148,7 +150,7 @@ settings flashSettings;
 FlashStorage(flashMemory, settings);
 
 volatile boolean relay = false, interruptEnable = true, clearRawBuffer = false;
-boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreaming = false, ledStatusOld = false, buttonStatus = false, buttonStatusOld = false;
+boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreaming = false, serialUsbStreamingStart = false, ledStatusOld = false, buttonStatus = false, buttonStatusOld = false;
 uint32_t lastBufferSentTime = 0, lastUsbStreaming = 0;
 uint8_t buttonTimer = 0;
 floatValue kwh = { .value = 0 }, kvah = { .value = 0 }, kvarh = { .value = 0 };
@@ -180,6 +182,8 @@ void enableCanReceiver() {
 void setup() {
   flashSettings = flashMemory.read();
   checkSettings();
+
+  debugInit();
 
   pinMode(PIN_CAN, INPUT_PULLUP);
   pinMode(PIN_WIFI, INPUT_PULLUP);
@@ -306,22 +310,45 @@ void loop() {
   yeldTask();
 
   if (serialUsbStreaming) {
-    if (rawBufferLow.isReady) {
+    if (serialUsbStreamingStart && rawBufferLow.isReady) {
+      debug1high();
       SerialUSB.write((uint8_t*)rawBufferLow.rawData, (uint32_t)rawBufferLow.sampleCount);
       rawBufferLow.isReady = false;
+      debug1low();
     }
-    else if (rawBufferHigh.isReady) {
+    else if (serialUsbStreamingStart && rawBufferHigh.isReady) {
+      debug1high();
       SerialUSB.write((uint8_t*)rawBufferHigh.rawData, (uint32_t)rawBufferHigh.sampleCount);
       rawBufferHigh.isReady = false;
+      debug1low();
     }
 
     if (SerialUSB.available()) {
       switch (SerialUSB.read()) {
         case 0:
+          if (!serialUsbStreamingStart) {
+            serialUsbStreamingStart = true;
+            floatValue f = { .value = RAW_TO_AMP };
+            SerialUSB.write(f.bytes[3]);
+            SerialUSB.write(f.bytes[2]);
+            SerialUSB.write(f.bytes[1]);
+            SerialUSB.write(f.bytes[0]);
+            f.value = RAW_TO_VOLT;
+            SerialUSB.write(f.bytes[3]);
+            SerialUSB.write(f.bytes[2]);
+            SerialUSB.write(f.bytes[1]);
+            SerialUSB.write(f.bytes[0]);
+            f.value = RAW_TO_VOLT;
+            SerialUSB.write(f.bytes[3]);
+            SerialUSB.write(f.bytes[2]);
+            SerialUSB.write(f.bytes[1]);
+            SerialUSB.write(f.bytes[0]);
+          }
           lastUsbStreaming = millis();
           break;
         case '\n':
           serialUsbStreaming = false;
+          serialUsbStreamingStart = false;
           break;
         case 20:
           relay = false;
@@ -334,7 +361,10 @@ void loop() {
       }
     }
 
-    if (millis() - lastUsbStreaming > 500) serialUsbStreaming = false;
+    if (millis() - lastUsbStreaming > 500) {
+      serialUsbStreaming = false;
+      serialUsbStreamingStart = false;
+    }
   }
   else processSerial(&serialUsb);
 
@@ -361,8 +391,9 @@ boolean processSerial(serial* s) {
   if (!s->stream->available()) return returnValue;
 
   uint8_t data = s->stream->read();
-  if (data == '\n' || data == '\r') {
+  if (data == '\n') {
     if (s->decoder.i) {
+      for (uint8_t k = s->decoder.i; k < 4; k++) s->decoder.a4[k] = 0;
       a4_to_a3(s->decoder.a3, s->decoder.a4);
       for (uint8_t k = 0; k < s->decoder.i - 1; k++) {
         s->buffer[s->bufferIndex++] = s->decoder.a3[k];
@@ -377,139 +408,205 @@ boolean processSerial(serial* s) {
       }
       s->decoder.crc.value = ~s->decoder.crc.value;
 
-      if (s->buffer[0] == 0x01 && s->buffer[1] == 0x00 &&
-          (s->buffer[3] == s->myID || s->buffer[3] == 0x00) &&
-          s->buffer[s->bufferIndex - 4] == s->decoder.crc.bytes[3] &&
-          s->buffer[s->bufferIndex - 3] == s->decoder.crc.bytes[2] &&
-          s->buffer[s->bufferIndex - 2] == s->decoder.crc.bytes[1] &&
-          s->buffer[s->bufferIndex - 1] == s->decoder.crc.bytes[0]) {
-        uint32Value len;
-        len.bytes[3] = s->buffer[4];
-        len.bytes[2] = s->buffer[5];
-        len.bytes[1] = s->buffer[6];
-        len.bytes[0] = s->buffer[7];
+      if (s->buffer[0] == 0x01 && s->buffer[1] == 0x00) {
+        if (s->buffer[s->bufferIndex - 4] == s->decoder.crc.bytes[3] &&
+            s->buffer[s->bufferIndex - 3] == s->decoder.crc.bytes[2] &&
+            s->buffer[s->bufferIndex - 2] == s->decoder.crc.bytes[1] &&
+            s->buffer[s->bufferIndex - 1] == s->decoder.crc.bytes[0]) {
+          if (s->buffer[3] == s->myID || s->buffer[3] == 0x00) {
+            uint32Value len;
+            len.bytes[3] = s->buffer[4];
+            len.bytes[2] = s->buffer[5];
+            len.bytes[1] = s->buffer[6];
+            len.bytes[0] = s->buffer[7];
 
-        if (len.value == s->bufferIndex - 12) {
-          if (len.value == 0) writeVoid(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
-          else {
-            returnValue = true;
-            switch (s->buffer[8]) {
-              case 0: //send board type
-                if (len.value != 1) break;
-                writeBoardInfo(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
-                break;
+            if (len.value == s->bufferIndex - 12) {
+              if (len.value == 0) writeVoid(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+              else {
+                switch (s->buffer[8]) {
+                  case 0: //send board type
+                    if (len.value == 1) {
+                      writeBoardInfo(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
 
-              case 10: // send status
-                if (len.value != 1) break;
-                writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
-                break;
+                  case 10: // send status
+                    if (len.value == 1) {
+                      writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
 
-              case 11: // send status and measures
-                if (len.value != 1) break;
-                if (bufferLow.isReady) {
-                  prepareBuffer(&bufferLow);
-                  writeStatusMeasures(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferLow);
-                  bufferLow.isReady = false;
-                  lastBufferSentTime = millis();
+                  case 11: // send status and measures
+                    if (len.value == 1) {
+                      if (bufferLow.isReady) {
+                        prepareBuffer(&bufferLow);
+                        writeStatusMeasures(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferLow);
+                        bufferLow.isReady = false;
+                        lastBufferSentTime = millis();
+                      }
+                      else if (bufferHigh.isReady) {
+                        prepareBuffer(&bufferHigh);
+                        writeStatusMeasures(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferHigh);
+                        bufferHigh.isReady = false;
+                        lastBufferSentTime = millis();
+                      }
+                      else writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 12: // send status, measures and waveform
+                    if (len.value == 1) {
+                      if (bufferLow.isReady) {
+                        prepareBuffer(&bufferLow);
+                        writeStatusMeasuresWaveform(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferLow);
+                        bufferLow.isReady = false;
+                        lastBufferSentTime = millis();
+                      }
+                      else if (bufferHigh.isReady) {
+                        prepareBuffer(&bufferHigh);
+                        writeStatusMeasuresWaveform(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferHigh);
+                        bufferHigh.isReady = false;
+                        lastBufferSentTime = millis();
+                      }
+                      else writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 20: // relay
+                    if (len.value == 2) {
+                      relay = s->buffer[9] != 0;
+                      nativeDigitalWrite(PIN_RELAY, relay);
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], relay);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 250: // send settings
+                    if (len.value == 1) {
+                      writeSettings(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &flashSettings);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 251: // save settings
+                    if (len.value == 115) {
+                      flashSettings.valid = true;
+                      flashSettings.automaticPowerOn = s->buffer[10];
+                      serialCan.myID = flashSettings.canID = s->buffer[11];
+                      memcpy(flashSettings.wifiIP, s->buffer + 12, 4);
+                      memcpy(flashSettings.wifiGateway, s->buffer + 16, 4);
+                      memcpy(flashSettings.wifiSubnet, s->buffer + 20, 4);
+                      memcpy(flashSettings.wifiName, s->buffer + 24, 33);
+                      memcpy(flashSettings.wifiPassword, s->buffer + 57, 33);
+                      memcpy(flashSettings.wifiLoginPassword, s->buffer + 90, 33);
+                      checkSettings();
+                      flashMemory.write(flashSettings);
+                      if (hasWifi) {
+                        pinMode(PIN_RESET_ESP, OUTPUT); nativeDigitalWrite(PIN_RESET_ESP, LOW);
+                        delay(25);
+                        pinMode(PIN_RESET_ESP, INPUT_PULLUP);
+                      }
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 253: // serial streaming
+                    if (len.value == 1) {
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
+                      serialUsbStreaming = true;
+                      lastUsbStreaming = millis();
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 254: // serial bridge wifi
+                    if (len.value == 1) {
+                      if (hasWifi) serialBridgeWifi = true;
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  case 255: // reset
+                    if (len.value == 1) {
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
+                      delay(250);
+                      NVIC_SystemReset();
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
+                  default:
+                    s->stream->print(F("E\r\n"));
+                    s->stream->flush();
+                    break;
                 }
-                else if (bufferHigh.isReady) {
-                  prepareBuffer(&bufferHigh);
-                  writeStatusMeasures(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferHigh);
-                  bufferHigh.isReady = false;
-                  lastBufferSentTime = millis();
-                }
-                else writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
-                break;
-
-              case 12: // send status, measures and waveform
-                if (len.value != 1) break;
-                if (bufferLow.isReady) {
-                  prepareBuffer(&bufferLow);
-                  writeStatusMeasuresWaveform(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferLow);
-                  bufferLow.isReady = false;
-                  lastBufferSentTime = millis();
-                }
-                else if (bufferHigh.isReady) {
-                  prepareBuffer(&bufferHigh);
-                  writeStatusMeasuresWaveform(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &bufferHigh);
-                  bufferHigh.isReady = false;
-                  lastBufferSentTime = millis();
-                }
-                else writeStatus(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2]);
-                break;
-
-              case 20: // relay
-                if (len.value != 2) break;
-                relay = s->buffer[9] != 0;
-                nativeDigitalWrite(PIN_RELAY, relay);
-                writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], relay);
-                break;
-
-              case 250: // send settings
-                if (len.value != 1) break;
-                writeSettings(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &flashSettings);
-                break;
-
-              case 251: // save settings
-                if (len.value != 115) break;
-                flashSettings.valid = true;
-                flashSettings.automaticPowerOn = s->buffer[10];
-                serialCan.myID = flashSettings.canID = s->buffer[11];
-                memcpy(flashSettings.wifiIP, s->buffer + 12, 4);
-                memcpy(flashSettings.wifiGateway, s->buffer + 16, 4);
-                memcpy(flashSettings.wifiSubnet, s->buffer + 20, 4);
-                memcpy(flashSettings.wifiName, s->buffer + 24, 33);
-                memcpy(flashSettings.wifiPassword, s->buffer + 57, 33);
-                memcpy(flashSettings.wifiLoginPassword, s->buffer + 90, 33);
-                checkSettings();
-                flashMemory.write(flashSettings);
-                if (hasWifi) {
-                  pinMode(PIN_RESET_ESP, OUTPUT); nativeDigitalWrite(PIN_RESET_ESP, LOW);
-                  delay(25);
-                  pinMode(PIN_RESET_ESP, INPUT_PULLUP);
-                }
-                writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
-                break;
-
-              case 253: // serial streaming
-                if (len.value != 1) break;
-                writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
-                lastUsbStreaming = millis();
-                {
-                  floatValue f = { .value = RAW_TO_AMP };
-                  SerialUSB.write(f.bytes[3]);
-                  SerialUSB.write(f.bytes[2]);
-                  SerialUSB.write(f.bytes[1]);
-                  SerialUSB.write(f.bytes[0]);
-                  f.value = RAW_TO_VOLT;
-                  SerialUSB.write(f.bytes[3]);
-                  SerialUSB.write(f.bytes[2]);
-                  SerialUSB.write(f.bytes[1]);
-                  SerialUSB.write(f.bytes[0]);
-                  f.value = RAW_TO_VOLT;
-                  SerialUSB.write(f.bytes[3]);
-                  SerialUSB.write(f.bytes[2]);
-                  SerialUSB.write(f.bytes[1]);
-                  SerialUSB.write(f.bytes[0]);
-                }
-                serialUsbStreaming = true;
-                break;
-
-              case 254: // serial bridge wifi
-                if (len.value != 1) break;
-                if (hasWifi) serialBridgeWifi = true;
-                writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
-                break;
-
-              case 255: // reset
-                if (len.value != 1) break;
-                writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], true);
-                NVIC_SystemReset();
-                break;
+              }
+            }
+            else {
+              s->stream->print(F("E\r\n"));
+              s->stream->flush();
             }
           }
         }
+        else {
+          s->stream->print(F("E\r\n"));
+          s->stream->flush();
+        }
       }
+      else {
+        s->stream->print(F("FW\r\n"));
+        s->stream->flush();
+      }
+    }
+    else {
+      s->stream->print(F("E\r\n"));
+      s->stream->flush();
     }
 
     s->bufferIndex = 0;
@@ -704,6 +801,8 @@ void DMAC_Handler() {
     DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL | DMAC_CHINTENCLR_TERR | DMAC_CHINTENCLR_SUSP;
   }
   else if (active_channel == DMA_CH_RX) {
+    debug0high();
+
     DMAC->CHID.reg = DMAC_CHID_ID(DMA_CH_TX);
     DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL | DMAC_CHINTENCLR_TERR | DMAC_CHINTENCLR_SUSP;
 
@@ -805,9 +904,9 @@ void DMAC_Handler() {
     v1Filt.value /= 65536;
     v2Filt.value /= 65536;
 
-    boolean overload = i.value > (int64_t)ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-ADC_RANGE) * (int64_t)65536 ||
-                       v1.value > (int64_t)ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-ADC_RANGE) * (int64_t)65536 ||
-                       v2.value > (int64_t)ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-ADC_RANGE) * (int64_t)65536;
+    boolean overload = i.value > (int64_t)CURRENT_ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-CURRENT_ADC_RANGE) * (int64_t)65536 ||
+                       v1.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
+                       v2.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536;
     if (overload) overloadTimer = OVELOAD_PERIOD;
     else if (overloadTimer) overloadTimer--;
 
@@ -990,6 +1089,8 @@ void DMAC_Handler() {
     signOld = sign;
 
     measureCounter++;
+
+    debug0low();
   }
 }
 

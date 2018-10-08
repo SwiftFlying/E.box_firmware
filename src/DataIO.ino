@@ -343,12 +343,14 @@ void updateEncoderStream(Stream* stream, b64_crc32_coder* encoder, int8_t pinTxE
   encoder->a3[encoder->i++] = dataRaw;
   if (encoder->i >= 3) {
     a3_to_a4(encoder->a4, encoder->a3);
-    for (uint8_t k = 0; k < 4; k++) {
-      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
-      stream->write(b64_alphabet[encoder->a4[k]]);
-      if (pinTxEn >= 0) stream->flush();
-    }
+    for (uint8_t k = 0; k < 4; k++) encoder->a4[k] = b64_alphabet[encoder->a4[k]];
     encoder->i = 0;
+
+    if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
+    debug1high();
+    stream->write(encoder->a4, 4);
+    if (pinTxEn >= 0) stream->flush();
+    debug1low();
   }
 
   if (updateCrc) {
@@ -367,21 +369,23 @@ void finalizeEncoderStream(Stream* stream, b64_crc32_coder* encoder, int8_t pinT
   if (encoder->i) {
     for (uint8_t k = encoder->i; k < 3; k++) encoder->a3[k] = 0;
     a3_to_a4(encoder->a4, encoder->a3);
-    for (uint8_t k = 0; k <= encoder->i; k++) {
-      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
-      stream->write(b64_alphabet[encoder->a4[k]]);
-      if (pinTxEn >= 0) stream->flush();
-    }
-    while (encoder->i++ < 3) {
-      if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
-      stream->write('=');
-      if (pinTxEn >= 0) stream->flush();
-    }
-  }
+    encoder->a4[0] = b64_alphabet[encoder->a4[0]];
+    encoder->a4[1] = b64_alphabet[encoder->a4[1]];
+    if (encoder->i == 1) encoder->a4[2] = '=';
+    else encoder->a4[2] = b64_alphabet[encoder->a4[2]];
+    encoder->a4[3] = '=';
 
-  if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
+    if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
+    debug1high();
+    stream->write(encoder->a4, 4);
+  }
+  else {
+    if (pinTxEn >= 0) while (!digitalRead(pinTxEn)) yeldTask();
+    debug1high();
+  }
   stream->write('\n');
   stream->flush();
+  debug1low();
 }
 
 void initCoder(b64_crc32_coder* coder) {
