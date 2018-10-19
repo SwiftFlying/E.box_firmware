@@ -2,8 +2,8 @@ void writeVoid(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitActio
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -20,8 +20,8 @@ void writeBoardInfo(Stream* stream, b64_crc32_coder* encoder, void (*preTransmit
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -69,8 +69,8 @@ void writeSettings(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitA
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -97,8 +97,8 @@ void writeBoolean(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAc
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -117,8 +117,8 @@ void writeStatus(Stream* stream, b64_crc32_coder* encoder, void (*preTransmitAct
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -138,8 +138,8 @@ void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTra
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
@@ -215,8 +215,8 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   if (preTransmitAction) (*preTransmitAction)();
   initCoder(encoder);
 
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x01);
-  updateEncoderStream(stream, encoder, pinTxEn, true, (uint8_t)0x00);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[0]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, FIRMWARE_VERSION[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 

@@ -12,7 +12,7 @@
 #error Wrong buffer size, change SERIAL_BUFFER_SIZE in RingBuffer.h to 256
 #endif
 
-const uint8_t FIRMWARE_VERSION[] = { 1, 0, 0 };
+const uint8_t FIRMWARE_VERSION[] = { 1, 1, 0 };
 
 #define IWV          (0x0  << 3) // 24
 #define V1WV         (0x1  << 3) // 24
@@ -53,11 +53,11 @@ const uint8_t b64_reverse_alphabet[] PROGMEM = {
 };
 
 const uint8_t PIN_INT = 8, PIN_CS = A2, PIN_BUTTON = 9, PIN_GREEN_LED = 13, PIN_RED_LED = 11, PIN_RELAY = 12, PIN_GPIO0_ESP = 6, PIN_RESET_ESP = 5, PIN_RX_EN_ESP = 7, PIN_CAN_ENABLE = 2, PIN_CAN = A0, PIN_WIFI = A1;
-const uint32_t MIN_MEASURE_SAMPLES = 10, MAX_MEASURE_SAMPLES = 800, OVELOAD_PERIOD = 4200, RX_BUFFER_SIZE = 200, RAW_BUFFER_SIZE = 9 * 200;
+const uint32_t MIN_MEASURE_SAMPLES = 10, MAX_MEASURE_SAMPLES = 800, OVELOAD_PERIOD = 4200, RX_BUFFER_SIZE = 200, RAW_BUFFER_SIZE = 9 * 200, CALIBRATION_SAMPLES = 16000;
 const uint32_t DMA_CH_TX = 0, DMA_CH_RX = 1;
 const uint8_t BUTTON_DEBOUNCE = 12;
 const float RAW_TO_AMP = 1.0 / 170240.0, RAW_TO_VOLT = 1.0 / 13565.65, RAW_TO_HZ = 8000.0, FLOAT_INVALID = 0.0 / 0.0;
-const int32_t VOLTAGE_ADC_RANGE = 5320000, CURRENT_ADC_RANGE = 3610790;
+const int32_t VOLTAGE_ADC_RANGE = 5320000, CURRENT_ADC_RANGE = 3610790, MAX_CALIBRATION_NOISE = 25000;
 const int64_t MIN_POWER = 0.5 / RAW_TO_VOLT / RAW_TO_AMP;
 
 union floatValue {
@@ -126,6 +126,12 @@ struct dmacdescriptor {
   uint32_t dstaddr;
   uint32_t descaddr;
 };
+struct calibration {
+  volatile boolean valid;
+  volatile int64_t iCalibration;
+  volatile int64_t v1Calibration;
+  volatile int64_t v2Calibration;
+};
 
 volatile samplesBuffer bufferLow = { .isReady = false, .overload = false, .overflow = false, .sampleCount = { .value = 0 }, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0,
                                      .iRms = { .value = 0 }, .v1Rms = { .value = 0 }, .v2Rms = { .value = 0 }, .hz = { .value = 0 }, .w = { .value = 0 }, .va = { .value = 0 }, .var = { .value = 0 }, .powerFactor = { .value = 0 },
@@ -147,10 +153,13 @@ serial serialCan = { .myID = 1, .bufferIndex = 0, .pinTxEn = -1 };
 serial serialWifi = { .myID = 0, .bufferIndex = 0, .pinTxEn = PIN_RX_EN_ESP };
 
 settings flashSettings;
-FlashStorage(flashMemory, settings);
+FlashStorage(settingsStorage, settings);
 
-volatile boolean relay = false, interruptEnable = true, clearRawBuffer = false;
-boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreaming = false, serialUsbStreamingStart = false, ledStatusOld = false, buttonStatus = false, buttonStatusOld = false;
+calibration flashCalibration;
+FlashStorage(calibrationStorage, calibration);
+
+volatile boolean relay = false, interruptEnable = true, serialUsbStreaming = false, clearRawBuffer = false;
+boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreamingStart = false, ledStatusOld = false, buttonStatus = false, buttonStatusOld = false;
 uint32_t lastBufferSentTime = 0, lastUsbStreaming = 0;
 uint8_t buttonTimer = 0;
 floatValue kwh = { .value = 0 }, kvah = { .value = 0 }, kvarh = { .value = 0 };
@@ -180,8 +189,11 @@ void enableCanReceiver() {
 }
 
 void setup() {
-  flashSettings = flashMemory.read();
+  flashSettings = settingsStorage.read();
   checkSettings();
+
+  flashCalibration = calibrationStorage.read();
+  checkCalibration();
 
   debugInit();
 
@@ -385,7 +397,7 @@ void loop() {
   }
 }
 
-// [0x01][0x00] [from] [to] [len3][len2][len1][len0] [... data ...] [crc3][crc2][crc1][crc0]
+// [fw0][fw1] [from] [to] [len3][len2][len1][len0] [... data ...] [crc3][crc2][crc1][crc0]
 boolean processSerial(serial* s) {
   boolean returnValue = false;
   if (!s->stream->available()) return returnValue;
@@ -408,7 +420,7 @@ boolean processSerial(serial* s) {
       }
       s->decoder.crc.value = ~s->decoder.crc.value;
 
-      if (s->buffer[0] == 0x01 && s->buffer[1] == 0x00) {
+      if (s->buffer[0] == FIRMWARE_VERSION[0] && s->buffer[1] == FIRMWARE_VERSION[1]) {
         if (s->buffer[s->bufferIndex - 4] == s->decoder.crc.bytes[3] &&
             s->buffer[s->bufferIndex - 3] == s->decoder.crc.bytes[2] &&
             s->buffer[s->bufferIndex - 2] == s->decoder.crc.bytes[1] &&
@@ -505,6 +517,18 @@ boolean processSerial(serial* s) {
                     }
                     break;
 
+                  case 240: // calibration
+                    if (len.value == 1) {
+                      boolean success = doCalibration();
+                      writeBoolean(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], success);
+                      returnValue = true;
+                    }
+                    else {
+                      s->stream->print(F("E\r\n"));
+                      s->stream->flush();
+                    }
+                    break;
+
                   case 250: // send settings
                     if (len.value == 1) {
                       writeSettings(s->stream, &(s->encoder), s->preTransmitAction, s->postTransmitAction, s->pinTxEn, s->buffer[3], s->buffer[2], &flashSettings);
@@ -518,7 +542,7 @@ boolean processSerial(serial* s) {
 
                   case 251: // save settings
                     if (len.value == 115) {
-                      flashSettings.valid = true;
+                      flashSettings.valid = s->buffer[9];
                       flashSettings.automaticPowerOn = s->buffer[10];
                       serialCan.myID = flashSettings.canID = s->buffer[11];
                       memcpy(flashSettings.wifiIP, s->buffer + 12, 4);
@@ -528,7 +552,7 @@ boolean processSerial(serial* s) {
                       memcpy(flashSettings.wifiPassword, s->buffer + 57, 33);
                       memcpy(flashSettings.wifiLoginPassword, s->buffer + 90, 33);
                       checkSettings();
-                      flashMemory.write(flashSettings);
+                      settingsStorage.write(flashSettings);
                       if (hasWifi) {
                         pinMode(PIN_RESET_ESP, OUTPUT); nativeDigitalWrite(PIN_RESET_ESP, LOW);
                         delay(25);
@@ -630,6 +654,122 @@ boolean processSerial(serial* s) {
   return returnValue;
 }
 
+boolean doCalibration() {
+  flashCalibration.valid = false;
+  serialUsbStreaming = true;
+
+  uint32_t count = 0;
+  int64_t iCalibration = 0, v1Calibration = 0, v2Calibration = 0;
+  int32_t iMin, iMax, v1Min, v1Max, v2Min, v2Max;
+  boolean firstMeasure = true;
+  while (count < CALIBRATION_SAMPLES) {
+    if (rawBufferLow.isReady) {
+      for (uint32_t i = 0; i < rawBufferLow.sampleCount; i += 9) {
+        int32_t measure;
+
+        measure = (rawBufferLow.rawData[i] << 16) | (rawBufferLow.rawData[i + 1] << 8) | rawBufferLow.rawData[i + 2];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          iMin = measure;
+          iMax = measure;
+        }
+        else {
+          if (measure < iMin) iMin = measure;
+          if (measure > iMax) iMax = measure;
+        }
+        iCalibration += measure;
+
+        measure = (rawBufferLow.rawData[i + 3] << 16) | (rawBufferLow.rawData[i + 4] << 8) | rawBufferLow.rawData[i + 5];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          v1Min = measure;
+          v1Max = measure;
+        }
+        else {
+          if (measure < v1Min) v1Min = measure;
+          if (measure > v1Max) v1Max = measure;
+        }
+        v1Calibration += measure;
+
+        measure = (rawBufferLow.rawData[i + 6] << 16) | (rawBufferLow.rawData[i + 7] << 8) | rawBufferLow.rawData[i + 8];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          v2Min = measure;
+          v2Max = measure;
+        }
+        else {
+          if (measure < v2Min) v2Min = measure;
+          if (measure > v2Max) v2Max = measure;
+        }
+        v2Calibration += measure;
+
+        count++;
+        firstMeasure = false;
+      }
+      rawBufferLow.isReady = false;
+    }
+    if (rawBufferHigh.isReady) {
+      for (uint32_t i = 0; i < rawBufferHigh.sampleCount; i += 9) {
+        int32_t measure;
+
+        measure = (rawBufferHigh.rawData[i] << 16) | (rawBufferHigh.rawData[i + 1] << 8) | rawBufferHigh.rawData[i + 2];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          iMin = measure;
+          iMax = measure;
+        }
+        else {
+          if (measure < iMin) iMin = measure;
+          if (measure > iMax) iMax = measure;
+        }
+        iCalibration += measure;
+
+        measure = (rawBufferHigh.rawData[i + 3] << 16) | (rawBufferHigh.rawData[i + 4] << 8) | rawBufferHigh.rawData[i + 5];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          v1Min = measure;
+          v1Max = measure;
+        }
+        else {
+          if (measure < v1Min) v1Min = measure;
+          if (measure > v1Max) v1Max = measure;
+        }
+        v1Calibration += measure;
+
+        measure = (rawBufferHigh.rawData[i + 6] << 16) | (rawBufferHigh.rawData[i + 7] << 8) | rawBufferHigh.rawData[i + 8];
+        if (measure & 0x00800000) measure |= 0xFF000000;
+        if (firstMeasure) {
+          v2Min = measure;
+          v2Max = measure;
+        }
+        else {
+          if (measure < v2Min) v2Min = measure;
+          if (measure > v2Max) v2Max = measure;
+        }
+        v2Calibration += measure;
+
+        count++;
+        firstMeasure = false;
+      }
+      rawBufferHigh.isReady = false;
+    }
+  }
+
+  serialUsbStreaming = false;
+  clearRawBuffer = true;
+
+  if (iMax - iMin > MAX_CALIBRATION_NOISE) return false;
+  if (v1Max - v1Min > MAX_CALIBRATION_NOISE) return false;
+  if (v2Max - v2Min > MAX_CALIBRATION_NOISE) return false;
+
+  flashCalibration.iCalibration = iCalibration / count * 65536;
+  flashCalibration.v1Calibration = v1Calibration / count * 65536;
+  flashCalibration.v2Calibration = v2Calibration / count * 65536;
+  flashCalibration.valid = true;
+  calibrationStorage.write(flashCalibration);
+  return true;
+}
+
 void prepareBuffer(volatile samplesBuffer* data) {
   if (data->overflow) {
     data->iRms.value = FLOAT_INVALID;
@@ -717,7 +857,7 @@ void ledTask() {
   else nativeDigitalWrite(PIN_RED_LED, HIGH);
 
   if (interruptEnable) {
-    nativeDigitalWrite(PIN_GREEN_LED, measureCounter < 399 || measureCounter > 401);
+    nativeDigitalWrite(PIN_GREEN_LED, measureCounter < 398 || measureCounter > 402);
     measureCounter = 0;
     ledStatusOld = true;
   }
@@ -760,6 +900,14 @@ void checkSettings() {
     memset(flashSettings.wifiName, 0, sizeof(flashSettings.wifiName));
     memset(flashSettings.wifiPassword, 0, sizeof(flashSettings.wifiPassword));
     memset(flashSettings.wifiLoginPassword, 0, sizeof(flashSettings.wifiLoginPassword));
+  }
+}
+
+void checkCalibration() {
+  if (!flashCalibration.valid) {
+    flashCalibration.iCalibration = 0;
+    flashCalibration.v1Calibration = 0;
+    flashCalibration.v2Calibration = 0;
   }
 }
 
@@ -830,6 +978,12 @@ void DMAC_Handler() {
     if (v2.bytes[4] & 0x80) v2.value |= 0xFFFFFF0000000000;
 
     v2.value = -v2.value;
+
+    if (flashCalibration.valid) {
+      i.value -= flashCalibration.iCalibration;
+      v1.value -= flashCalibration.v1Calibration;
+      v2.value -= flashCalibration.v2Calibration;
+    }
 
     if (!serialUsbStreaming || clearRawBuffer) {
       clearRawBuffer = false;
