@@ -57,7 +57,7 @@ const uint32_t MIN_MEASURE_SAMPLES = 10, MAX_MEASURE_SAMPLES = 800, OVELOAD_PERI
 const uint32_t DMA_CH_TX = 0, DMA_CH_RX = 1;
 const uint8_t BUTTON_DEBOUNCE = 12;
 const float RAW_TO_AMP = 1.0 / 170240.0, RAW_TO_VOLT = 1.0 / 13565.65, RAW_TO_HZ = 8000.0, FLOAT_INVALID = 0.0 / 0.0;
-const int32_t VOLTAGE_ADC_RANGE = 5320000, CURRENT_ADC_RANGE = 3610790, MAX_CALIBRATION_NOISE = 25000;
+const int32_t VOLTAGE_ADC_RANGE = 5320000, CURRENT_ADC_RANGE = 3610790, CURRENT_AVERAGE_RANGE = 2553600, MAX_CALIBRATION_NOISE = 25000;
 const int64_t MIN_POWER = 0.5 / RAW_TO_VOLT / RAW_TO_AMP;
 
 union floatValue {
@@ -168,6 +168,7 @@ float kwhCorrection = 0, kvahCorrection = 0, kvarhCorrection = 0;
 volatile uint32_t overloadTimer = 0, measureCounter = 0;
 int64_t iOld = 0, v1Old = 0, v2Old = 0;
 int64_t iFiltOld = 0, v1FiltOld = 0, v2FiltOld = 0;
+int64_t iFiltDcOld = 0, v1FiltDcOld = 0, v2FiltDcOld = 0;
 boolean signOld = false, dataSelection = false, dataSelectionIntegral = false, dataSelectionRaw = false;
 
 uint8_t dmaTxBuffer[10] = { IWV | 0b100, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, dmaRxBuffer[10];
@@ -942,6 +943,14 @@ int64_t mulB(int64_t n) { // n * 0.9990234375
   return (n * 1024 - n) / 1024;
 }
 
+int64_t mulC(int64_t n) { // n * 0.0078125
+  return n / 128;
+}
+
+int64_t mulD(int64_t n) { // n * 0.9921875
+  return (n * 128 - n) / 128;
+}
+
 void DMAC_Handler() {
   uint8_t active_channel =  DMAC->INTPEND.reg & DMAC_INTPEND_ID_Msk;
   if (active_channel == DMA_CH_TX) {
@@ -984,6 +993,48 @@ void DMAC_Handler() {
       v1.value -= flashCalibration.v1Calibration;
       v2.value -= flashCalibration.v2Calibration;
     }
+
+    int64Value iFilt;
+    iFilt.value = mulA(i.value) - mulA(iOld) + mulB(iFiltOld);
+    iOld = i.value;
+    iFiltOld = iFilt.value;
+
+    int64Value v1Filt;
+    v1Filt.value = mulA(v1.value) - mulA(v1Old) + mulB(v1FiltOld);
+    v1Old = v1.value;
+    v1FiltOld = v1Filt.value;
+
+    int64Value v2Filt;
+    v2Filt.value = mulA(v2.value) - mulA(v2Old) + mulB(v2FiltOld);
+    v2Old = v2.value;
+    v2FiltOld = v2Filt.value;
+
+    iFilt.value /= 65536;
+    v1Filt.value /= 65536;
+    v2Filt.value /= 65536;
+
+    int64Value iFiltDc;
+    iFiltDc.value = mulC(i.value) + mulD(iFiltDcOld);
+    iFiltDcOld = iFiltDc.value;
+
+    int64Value v1FiltDc;
+    v1FiltDc.value = mulC(v1.value) + mulD(v1FiltDcOld);
+    v1FiltDcOld = v1FiltDc.value;
+
+    int64Value v2FiltDc;
+    v2FiltDc.value = mulC(v2.value) + mulD(v2FiltDcOld);
+    v2FiltDcOld = v2FiltDc.value;
+
+    iFiltDc.value /= 65536;
+    v1FiltDc.value /= 65536;
+    v2FiltDc.value /= 65536;
+
+    boolean overload = i.value > (int64_t)CURRENT_ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-CURRENT_ADC_RANGE) * (int64_t)65536 ||
+                       v1.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
+                       v2.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
+                       iFiltDc.value > (int64_t)CURRENT_AVERAGE_RANGE * (int64_t)65536 || iFiltDc.value < (int64_t)(-CURRENT_AVERAGE_RANGE) * (int64_t)65536;
+    if (overload) overloadTimer = OVELOAD_PERIOD;
+    else if (overloadTimer) overloadTimer--;
 
     if (!serialUsbStreaming || clearRawBuffer) {
       clearRawBuffer = false;
@@ -1038,31 +1089,6 @@ void DMAC_Handler() {
         }
       }
     }
-
-    int64Value iFilt;
-    iFilt.value = mulA(i.value) - mulA(iOld) + mulB(iFiltOld);
-    iOld = i.value;
-    iFiltOld = iFilt.value;
-
-    int64Value v1Filt;
-    v1Filt.value = mulA(v1.value) - mulA(v1Old) + mulB(v1FiltOld);
-    v1Old = v1.value;
-    v1FiltOld = v1Filt.value;
-
-    int64Value v2Filt;
-    v2Filt.value = mulA(v2.value) - mulA(v2Old) + mulB(v2FiltOld);
-    v2Old = v2.value;
-    v2FiltOld = v2Filt.value;
-
-    iFilt.value /= 65536;
-    v1Filt.value /= 65536;
-    v2Filt.value /= 65536;
-
-    boolean overload = i.value > (int64_t)CURRENT_ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-CURRENT_ADC_RANGE) * (int64_t)65536 ||
-                       v1.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
-                       v2.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536;
-    if (overload) overloadTimer = OVELOAD_PERIOD;
-    else if (overloadTimer) overloadTimer--;
 
     if (dataSelection && bufferHigh.sampleCount.value < MAX_MEASURE_SAMPLES) {
       bufferHigh.waveform[bufferHigh.sampleCount.value][0] = iFilt.bytes[0];
