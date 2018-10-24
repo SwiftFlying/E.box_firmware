@@ -12,7 +12,7 @@
 #error Wrong buffer size, change SERIAL_BUFFER_SIZE in RingBuffer.h to 256
 #endif
 
-const uint8_t FIRMWARE_VERSION[] = { 1, 1, 0 };
+const uint8_t FIRMWARE_VERSION[] = { 1, 2, 0 };
 
 #define IWV          (0x0  << 3) // 24
 #define V1WV         (0x1  << 3) // 24
@@ -86,7 +86,7 @@ struct samplesBuffer {
 struct integralMeasureBuffer {
   boolean isReady;
   uint32_t sampleCount;
-  int64_t rmsCurrentSum, rmsVoltage1Sum, activePowerSum;
+  int64_t rmsCurrentSum, rmsVoltage1Sum, rmsVoltage2Sum, activePowerSum;
 };
 struct rawDataBuffer {
   boolean isReady;
@@ -142,8 +142,8 @@ volatile samplesBuffer bufferHigh = { .isReady = false, .overload = false, .over
                                       .waveform = { 0 }
                                     };
 
-volatile integralMeasureBuffer integralBufferLow = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .activePowerSum = 0 };
-volatile integralMeasureBuffer integralBufferHigh = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .activePowerSum = 0 };
+volatile integralMeasureBuffer integralBufferLow = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0 };
+volatile integralMeasureBuffer integralBufferHigh = { .isReady = false, .sampleCount = 0, .rmsCurrentSum = 0, .rmsVoltage1Sum = 0, .rmsVoltage2Sum = 0, .activePowerSum = 0 };
 
 volatile rawDataBuffer rawBufferLow = { .isReady = false, .sampleCount = 0, .rawData = { 0 } };
 volatile rawDataBuffer rawBufferHigh = { .isReady = false, .sampleCount = 0, .rawData = { 0 } };
@@ -158,12 +158,15 @@ FlashStorage(settingsStorage, settings);
 calibration flashCalibration;
 FlashStorage(calibrationStorage, calibration);
 
-volatile boolean relay = false, interruptEnable = true, serialUsbStreaming = false, clearRawBuffer = false;
-boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreamingStart = false, ledStatusOld = false, buttonStatus = false, buttonStatusOld = false;
+volatile boolean relay = false, interruptEnable = true, serialUsbStreaming = false, clearRawBuffer = false, wrongWiringWarning = false;
+boolean hasCan = false, hasWifi = false, serialBridgeWifi = false, serialUsbStreamingStart = false, greenLedBlinkStatus = true, redLedBlinkStatus = false, buttonStatus = false, buttonStatusOld = false;
 uint32_t lastBufferSentTime = 0, lastUsbStreaming = 0;
 uint8_t buttonTimer = 0;
 floatValue kwh = { .value = 0 }, kvah = { .value = 0 }, kvarh = { .value = 0 };
 float kwhCorrection = 0, kvahCorrection = 0, kvarhCorrection = 0;
+
+volatile boolean updateFiltDcBuffer = true;
+volatile int32_t iFiltDcBuffer, v1FiltDcBuffer, v2FiltDcBuffer;
 
 volatile uint32_t overloadTimer = 0, measureCounter = 0;
 int64_t iOld = 0, v1Old = 0, v2Old = 0;
@@ -323,17 +326,89 @@ void loop() {
   yeldTask();
 
   if (serialUsbStreaming) {
-    if (serialUsbStreamingStart && rawBufferLow.isReady) {
-      debug1high();
-      SerialUSB.write((uint8_t*)rawBufferLow.rawData, (uint32_t)rawBufferLow.sampleCount);
-      rawBufferLow.isReady = false;
-      debug1low();
-    }
-    else if (serialUsbStreamingStart && rawBufferHigh.isReady) {
-      debug1high();
-      SerialUSB.write((uint8_t*)rawBufferHigh.rawData, (uint32_t)rawBufferHigh.sampleCount);
-      rawBufferHigh.isReady = false;
-      debug1low();
+    if (serialUsbStreamingStart) {
+      boolean writeData = false;
+
+      if (rawBufferLow.isReady) {
+        debug1high();
+        SerialUSB.write((uint8_t*)rawBufferLow.rawData, (uint32_t)rawBufferLow.sampleCount);
+        debug1low();
+        rawBufferLow.isReady = false;
+        writeData = true;
+      }
+      else if (rawBufferHigh.isReady) {
+        debug1high();
+        SerialUSB.write((uint8_t*)rawBufferHigh.rawData, (uint32_t)rawBufferHigh.sampleCount);
+        debug1low();
+        rawBufferHigh.isReady = false;
+        writeData = true;
+      }
+
+      if (writeData) {
+        byte buffer[26];
+        buffer[0] = 0;
+        buffer[14] = kwh.bytes[3];
+        buffer[15] = kwh.bytes[2];
+        buffer[16] = kwh.bytes[1];
+        buffer[17] = kwh.bytes[0];
+        buffer[18] = kvah.bytes[3];
+        buffer[19] = kvah.bytes[2];
+        buffer[20] = kvah.bytes[1];
+        buffer[21] = kvah.bytes[0];
+        buffer[22] = kvarh.bytes[3];
+        buffer[23] = kvarh.bytes[2];
+        buffer[24] = kvarh.bytes[1];
+        buffer[25] = kvarh.bytes[0];
+
+        if (bufferLow.isReady) {
+          prepareBuffer(&bufferLow);
+          buffer[1] = 1;
+          buffer[2] = bufferLow.w.bytes[3];
+          buffer[3] = bufferLow.w.bytes[2];
+          buffer[4] = bufferLow.w.bytes[1];
+          buffer[5] = bufferLow.w.bytes[0];
+          buffer[6] = bufferLow.va.bytes[3];
+          buffer[7] = bufferLow.va.bytes[2];
+          buffer[8] = bufferLow.va.bytes[1];
+          buffer[9] = bufferLow.va.bytes[0];
+          buffer[10] = bufferLow.var.bytes[3];
+          buffer[11] = bufferLow.var.bytes[2];
+          buffer[12] = bufferLow.var.bytes[1];
+          buffer[13] = bufferLow.var.bytes[0];
+          bufferLow.isReady = false;
+          debug1high();
+          SerialUSB.write(buffer, sizeof(buffer));
+          debug1low();
+          lastBufferSentTime = millis();
+        }
+        else if (bufferHigh.isReady) {
+          prepareBuffer(&bufferHigh);
+          buffer[1] = 1;
+          buffer[2] = bufferHigh.w.bytes[3];
+          buffer[3] = bufferHigh.w.bytes[2];
+          buffer[4] = bufferHigh.w.bytes[1];
+          buffer[5] = bufferHigh.w.bytes[0];
+          buffer[6] = bufferHigh.va.bytes[3];
+          buffer[7] = bufferHigh.va.bytes[2];
+          buffer[8] = bufferHigh.va.bytes[1];
+          buffer[9] = bufferHigh.va.bytes[0];
+          buffer[10] = bufferHigh.var.bytes[3];
+          buffer[11] = bufferHigh.var.bytes[2];
+          buffer[12] = bufferHigh.var.bytes[1];
+          buffer[13] = bufferHigh.var.bytes[0];
+          bufferHigh.isReady = false;
+          debug1high();
+          SerialUSB.write(buffer, sizeof(buffer));
+          debug1low();
+          lastBufferSentTime = millis();
+        }
+        else {
+          buffer[1] = 0;
+          debug1high();
+          SerialUSB.write(buffer, sizeof(buffer));
+          debug1low();
+        }
+      }
     }
 
     if (SerialUSB.available()) {
@@ -341,6 +416,7 @@ void loop() {
         case 0:
           if (!serialUsbStreamingStart) {
             serialUsbStreamingStart = true;
+            debug1high();
             floatValue f = { .value = RAW_TO_AMP };
             SerialUSB.write(f.bytes[3]);
             SerialUSB.write(f.bytes[2]);
@@ -356,6 +432,7 @@ void loop() {
             SerialUSB.write(f.bytes[2]);
             SerialUSB.write(f.bytes[1]);
             SerialUSB.write(f.bytes[0]);
+            debug1low();
           }
           lastUsbStreaming = millis();
           break;
@@ -374,7 +451,7 @@ void loop() {
       }
     }
 
-    if (millis() - lastUsbStreaming > 500) {
+    if (millis() - lastUsbStreaming > 500UL) {
       serialUsbStreaming = false;
       serialUsbStreamingStart = false;
     }
@@ -391,7 +468,7 @@ void loop() {
     clearRawBuffer = true;
   }
 
-  if (millis() - lastBufferSentTime > 2000UL) {
+  if (millis() - lastBufferSentTime > 500UL) {
     lastBufferSentTime = millis();
     bufferLow.isReady = false;
     bufferHigh.isReady = false;
@@ -798,6 +875,7 @@ void yeldTask() {
   if (integralBufferLow.isReady) {
     float iRms = sqrt((float)integralBufferLow.rmsCurrentSum / (float)integralBufferLow.sampleCount) * RAW_TO_AMP;
     float v1Rms = sqrt((float)integralBufferLow.rmsVoltage1Sum / (float)integralBufferLow.sampleCount) * RAW_TO_VOLT;
+    float v2Rms = sqrt((float)integralBufferLow.rmsVoltage2Sum / (float)integralBufferLow.sampleCount) * RAW_TO_VOLT;
     float w = (float)integralBufferLow.activePowerSum / (float)integralBufferLow.sampleCount * RAW_TO_AMP * RAW_TO_VOLT;
     float va = w ? iRms * v1Rms : 0;
     float var = w ? sqrt(va * va - w * w) : 0;
@@ -821,11 +899,14 @@ void yeldTask() {
     kvarhCorrection = (t - kvarh.value) - y;
     kvarh.value = t;
 
+    wrongWiringWarning = v2Rms > 70 && v2Rms > v1Rms / 2;
+
     integralBufferLow.isReady = false;
   }
   else if (integralBufferHigh.isReady) {
     float iRms = sqrt((float)integralBufferHigh.rmsCurrentSum / (float)integralBufferHigh.sampleCount) * RAW_TO_AMP;
     float v1Rms = sqrt((float)integralBufferHigh.rmsVoltage1Sum / (float)integralBufferHigh.sampleCount) * RAW_TO_VOLT;
+    float v2Rms = sqrt((float)integralBufferHigh.rmsVoltage2Sum / (float)integralBufferHigh.sampleCount) * RAW_TO_VOLT;
     float w = (float)integralBufferHigh.activePowerSum / (float)integralBufferHigh.sampleCount * RAW_TO_AMP * RAW_TO_VOLT;
     float va = w ? iRms * v1Rms : 0;
     float var = w ? sqrt(va * va - w * w) : 0;
@@ -849,22 +930,37 @@ void yeldTask() {
     kvarhCorrection = (t - kvarh.value) - y;
     kvarh.value = t;
 
+    wrongWiringWarning = v2Rms > 70 && v2Rms > v1Rms / 2;
+
     integralBufferHigh.isReady = false;
   }
 }
 
 void ledTask() {
-  if (interruptEnable) nativeDigitalWrite(PIN_RED_LED, overloadTimer == 0);
+  if (interruptEnable) {
+    if (overloadTimer) {
+      nativeDigitalWrite(PIN_RED_LED, false);
+      redLedBlinkStatus = false;
+    }
+    else if (wrongWiringWarning) {
+      nativeDigitalWrite(PIN_RED_LED, redLedBlinkStatus);
+      redLedBlinkStatus = !redLedBlinkStatus;
+    }
+    else {
+      nativeDigitalWrite(PIN_RED_LED, true);
+      redLedBlinkStatus = false;
+    }
+  }
   else nativeDigitalWrite(PIN_RED_LED, HIGH);
 
   if (interruptEnable) {
     nativeDigitalWrite(PIN_GREEN_LED, measureCounter < 398 || measureCounter > 402);
     measureCounter = 0;
-    ledStatusOld = true;
+    greenLedBlinkStatus = true;
   }
   else {
-    ledStatusOld = !ledStatusOld;
-    nativeDigitalWrite(PIN_GREEN_LED, ledStatusOld);
+    nativeDigitalWrite(PIN_GREEN_LED, greenLedBlinkStatus);
+    greenLedBlinkStatus = !greenLedBlinkStatus;
   }
 }
 
@@ -1029,6 +1125,12 @@ void DMAC_Handler() {
     v1FiltDc.value /= 65536;
     v2FiltDc.value /= 65536;
 
+    if (updateFiltDcBuffer) {
+      iFiltDcBuffer = iFiltDc.value;
+      v1FiltDcBuffer = v1FiltDc.value;
+      v2FiltDcBuffer = v2FiltDc.value;
+    }
+
     boolean overload = i.value > (int64_t)CURRENT_ADC_RANGE * (int64_t)65536 || i.value < (int64_t)(-CURRENT_ADC_RANGE) * (int64_t)65536 ||
                        v1.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v1.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
                        v2.value > (int64_t)VOLTAGE_ADC_RANGE * (int64_t)65536 || v2.value < (int64_t)(-VOLTAGE_ADC_RANGE) * (int64_t)65536 ||
@@ -1144,6 +1246,7 @@ void DMAC_Handler() {
             integralBufferHigh.sampleCount += bufferHigh.sampleCount.value;
             integralBufferHigh.rmsCurrentSum += bufferHigh.rmsCurrentSum;
             integralBufferHigh.rmsVoltage1Sum += bufferHigh.rmsVoltage1Sum;
+            integralBufferHigh.rmsVoltage2Sum += bufferHigh.rmsVoltage2Sum;
             integralBufferHigh.activePowerSum += bufferHigh.activePowerSum;
 
             if (!integralBufferLow.isReady) {
@@ -1152,6 +1255,7 @@ void DMAC_Handler() {
               integralBufferLow.sampleCount = 0;
               integralBufferLow.rmsCurrentSum = 0;
               integralBufferLow.rmsVoltage1Sum = 0;
+              integralBufferLow.rmsVoltage2Sum = 0;
               integralBufferLow.activePowerSum = 0;
 
               dataSelectionIntegral = false;
@@ -1161,6 +1265,7 @@ void DMAC_Handler() {
             integralBufferLow.sampleCount += bufferHigh.sampleCount.value;
             integralBufferLow.rmsCurrentSum += bufferHigh.rmsCurrentSum;
             integralBufferLow.rmsVoltage1Sum += bufferHigh.rmsVoltage1Sum;
+            integralBufferLow.rmsVoltage2Sum += bufferHigh.rmsVoltage2Sum;
             integralBufferLow.activePowerSum += bufferHigh.activePowerSum;
 
             if (!integralBufferHigh.isReady) {
@@ -1169,6 +1274,7 @@ void DMAC_Handler() {
               integralBufferHigh.sampleCount = 0;
               integralBufferHigh.rmsCurrentSum = 0;
               integralBufferHigh.rmsVoltage1Sum = 0;
+              integralBufferHigh.rmsVoltage2Sum = 0;
               integralBufferHigh.activePowerSum = 0;
 
               dataSelectionIntegral = true;
@@ -1209,6 +1315,7 @@ void DMAC_Handler() {
             integralBufferHigh.sampleCount += bufferLow.sampleCount.value;
             integralBufferHigh.rmsCurrentSum += bufferLow.rmsCurrentSum;
             integralBufferHigh.rmsVoltage1Sum += bufferLow.rmsVoltage1Sum;
+            integralBufferHigh.rmsVoltage2Sum += bufferLow.rmsVoltage2Sum;
             integralBufferHigh.activePowerSum += bufferLow.activePowerSum;
 
             if (!integralBufferLow.isReady) {
@@ -1217,6 +1324,7 @@ void DMAC_Handler() {
               integralBufferLow.sampleCount = 0;
               integralBufferLow.rmsCurrentSum = 0;
               integralBufferLow.rmsVoltage1Sum = 0;
+              integralBufferLow.rmsVoltage2Sum = 0;
               integralBufferLow.activePowerSum = 0;
 
               dataSelectionIntegral = false;
@@ -1226,6 +1334,7 @@ void DMAC_Handler() {
             integralBufferLow.sampleCount += bufferLow.sampleCount.value;
             integralBufferLow.rmsCurrentSum += bufferLow.rmsCurrentSum;
             integralBufferLow.rmsVoltage1Sum += bufferLow.rmsVoltage1Sum;
+            integralBufferLow.rmsVoltage2Sum += bufferLow.rmsVoltage2Sum;
             integralBufferLow.activePowerSum += bufferLow.activePowerSum;
 
             if (!integralBufferHigh.isReady) {
@@ -1234,6 +1343,7 @@ void DMAC_Handler() {
               integralBufferHigh.sampleCount = 0;
               integralBufferHigh.rmsCurrentSum = 0;
               integralBufferHigh.rmsVoltage1Sum = 0;
+              integralBufferHigh.rmsVoltage2Sum = 0;
               integralBufferHigh.activePowerSum = 0;
 
               dataSelectionIntegral = true;

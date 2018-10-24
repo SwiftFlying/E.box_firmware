@@ -143,7 +143,7 @@ void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTra
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
-  uint32Value len { .value = 46 };
+  uint32Value len { .value = 58 };
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[2]);
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[1]);
@@ -191,6 +191,26 @@ void writeStatusMeasures(Stream* stream, b64_crc32_coder* encoder, void (*preTra
   updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[2]);
   updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[0]);
+
+  updateFiltDcBuffer = false;
+  floatValue f = { .value = iFiltDcBuffer * RAW_TO_AMP };
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+
+  f.value = v1FiltDcBuffer * RAW_TO_VOLT;
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+
+  f.value = v2FiltDcBuffer * RAW_TO_VOLT;
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+  updateFiltDcBuffer = true;
 
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[2]);
@@ -220,7 +240,7 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   updateEncoderStream(stream, encoder, pinTxEn, true, from);
   updateEncoderStream(stream, encoder, pinTxEn, true, to);
 
-  uint32Value len { .value = 55 + data->sampleCount.value * 12 };
+  uint32Value len { .value = 67 + data->sampleCount.value * 12 };
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[2]);
   updateEncoderStream(stream, encoder, pinTxEn, true, len.bytes[1]);
@@ -269,6 +289,26 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
   updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[1]);
   updateEncoderStream(stream, encoder, pinTxEn, true, data->powerFactor.bytes[0]);
 
+  updateFiltDcBuffer = false;
+  floatValue f = { .value = iFiltDcBuffer * RAW_TO_AMP };
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+
+  f.value = v1FiltDcBuffer * RAW_TO_VOLT;
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+
+  f.value = v2FiltDcBuffer * RAW_TO_VOLT;
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
+  updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[0]);
+  updateFiltDcBuffer = true;
+
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[2]);
   updateEncoderStream(stream, encoder, pinTxEn, true, kwh.bytes[1]);
@@ -286,7 +326,7 @@ void writeStatusMeasuresWaveform(Stream* stream, b64_crc32_coder* encoder, void 
 
   updateEncoderStream(stream, encoder, pinTxEn, true, data->overload);
 
-  floatValue f = { .value = RAW_TO_HZ };
+  f.value = RAW_TO_HZ;
   updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[3]);
   updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[2]);
   updateEncoderStream(stream, encoder, pinTxEn, true, f.bytes[1]);
